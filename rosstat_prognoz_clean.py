@@ -5,18 +5,6 @@ from typing import Any
 import pandas as pd
 
 
-"""
-Упрощённый скрипт для интервью.
-
-Задача: взять исходную таблицу Rosstat (Progn_3a.xls), где данные идут блоками
-по годам, и превратить её в "плоский" датасет (year × age) + сохранить сноски.
-
-Что здесь намеренно НЕ сделано (кандидат может предложить улучшения):
-- обработка ошибок (нет файла, битый XLS, нет pyarrow для Parquet, права на запись)
-- валидация данных (ожидаемые колонки/типы, пропуски year, контроль диапазонов)
-- контроль изменений источника (хэш/размер/mtime файла, журнал запусков, версионирование)
-"""
-
 # Все пути делаем относительными к папке `public_test`, чтобы скрипт работал
 # независимо от текущей директории запуска.
 BASE_DIR = Path(__file__).resolve().parent
@@ -34,14 +22,10 @@ YEAR_MAX = 2046
 
 
 def output_stem(source_type: str, theme_id: int, doc_id: int, indicator_id: int) -> str:
-    # Используется для имени выходных файлов, чтобы идентификаторы можно было
-    # восстановить из названия.
     return f"{source_type}_{theme_id}{doc_id}{indicator_id}"
 
 
 def is_year_row(text: str, years: set[str]) -> bool:
-    # В исходной таблице год обычно отдельной строкой (иногда "2024 год").
-    # Здесь используем проверку "подстрока входит", как в ноутбуке.
     return any(year in text for year in years)
 
 
@@ -64,22 +48,17 @@ def main() -> int:
     df = pd.read_excel(str(INPUT_XLS))
     df.columns = ["Возраст", "Всего", "Мужчины", "Женщины"]
 
-    # 2) Добавляем "паспорт" датасета (чтобы можно было однозначно связать с источником).
     df["doc_type"] = SOURCE_TYPE
     df["theme_id"] = THEME_ID
     df["doc_id"] = DOC_ID
     df["indicator_id"] = INDICATOR_ID
     df["Вариант прогноза"] = FORECAST_TYPE
 
-    # 3) Приводим поле "Возраст" к строке и выкидываем "шапку" таблицы/пустые строки.
     df["Возраст"] = df["Возраст"].astype(str).str.strip()
     df = df.iloc[4:]
     df = df[df["Возраст"].notna()]
     df = df[df["Возраст"] != "nan"]
 
-    # 4) Проходим по строкам: встречаем год → обновляем current_year;
-    #    встречаем сноску → сохраняем отдельно;
-    #    иначе считаем, что это возраст и добавляем запись в итоговый датасет.
     years = {str(y) for y in range(YEAR_MIN, YEAR_MAX + 1)}
     current_year = None
     rows: list[dict[str, Any]] = []
@@ -107,14 +86,12 @@ def main() -> int:
             }
         )
 
-    # 5) Собираем DataFrame и немного "подчищаем" year.
     population_predict = pd.DataFrame(rows)
     if not population_predict.empty:
-        # На случай, если сноска каким-то образом попала в year.
+
         population_predict = population_predict[~population_predict["year"].isin({f["text"] for f in footnotes})]
         population_predict["year"] = population_predict["year"].astype(str).str.replace(" год", "", regex=False)
 
-    # 6) Сохраняем результаты: CSV, Parquet и отдельный JSON со сносками.
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     csv_path = OUTPUT_DIR / f"{out_stem}.csv"
     parquet_path = OUTPUT_DIR / f"{out_stem}.parquet"
@@ -131,7 +108,6 @@ def main() -> int:
     with footnotes_json_path.open("w", encoding="utf-8") as f:
         json.dump(footnotes_data, f, ensure_ascii=False, indent=2)
 
-    # 7) Короткий отчёт в консоль (как в ноутбуке).
     print(f"Найдено сносок: {len(footnotes)}")
     print(f"Записей в датасете: {len(population_predict)}")
     print("Датасет сохранен:")
